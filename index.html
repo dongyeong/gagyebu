@@ -40,7 +40,7 @@ h2{font-size:15px;margin:0 0 12px;text-wrap:balance}
 @media (max-width:820px){
   .grid{display:flex;flex-direction:column;gap:14px}
   .grid > .stack{display:contents}
-  #entryForm{order:1} #listPanel{order:2} #catPanel{order:3} #backupPanel{order:4}
+  #entryForm{order:1} #listPanel{order:2} #catPanel{order:3} #backupPanel{order:4} #diagPanel{order:5}
 }
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px;min-width:0}
 .stack{display:flex;flex-direction:column;gap:14px}
@@ -202,6 +202,16 @@ details summary{cursor:pointer;font-weight:700;font-size:15px}
             <button type="button" class="btn small" id="sampleBtn">예시 데이터 넣기</button>
           </div>
         </div>
+
+        <details class="panel" id="diagPanel">
+          <summary>음성 진단 기록</summary>
+          <p class="hint">음성 입력이 안 될 때 이 칸을 열어 캡처해 보내 주세요. 버전 <span id="appVersion" class="num"></span></p>
+          <pre id="diagLog" style="font:12px/1.5 var(--num);white-space:pre-wrap;word-break:break-all;background:var(--bg);border-radius:8px;padding:10px;margin:8px 0;max-height:320px;overflow:auto">아직 기록이 없습니다.</pre>
+          <div class="row">
+            <button type="button" class="btn small" id="diagCopy">기록 복사</button>
+            <button type="button" class="btn small ghost" id="diagClear">지우기</button>
+          </div>
+        </details>
       </div>
 
       <div class="panel" id="listPanel">
@@ -389,6 +399,26 @@ function showInAppBanner(info){
 }
 showInAppBanner(inAppInfo(navigator.userAgent));
 
+/* ---------- 음성 진단 기록 ---------- */
+const APP_VERSION = '2026.10.26-3';
+const diagLines = [];
+function diag(msg){
+  const t = new Date();
+  diagLines.push(`${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}.${String(t.getMilliseconds()).padStart(3,'0')} ${msg}`);
+  if(diagLines.length > 60) diagLines.shift();
+  $('#diagLog').textContent = diagLines.join('\n');
+}
+$('#appVersion').textContent = APP_VERSION;
+diag(`버전 ${APP_VERSION} / ${navigator.userAgent}`);
+$('#diagCopy').onclick = ()=>{
+  const text = diagLines.join('\n');
+  (navigator.clipboard?.writeText(text) || Promise.reject()).then(()=>toast('진단 기록을 복사했습니다'), ()=>{
+    const range = document.createRange(); range.selectNodeContents($('#diagLog'));
+    const s = getSelection(); s.removeAllRanges(); s.addRange(range); toast('기록을 선택했습니다. 복사를 누르세요');
+  });
+};
+$('#diagClear').onclick = ()=>{ diagLines.length = 0; diag(`버전 ${APP_VERSION}`); };
+
 /* ---------- 음성 인식 ---------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null, listening = false;
@@ -400,48 +430,63 @@ if(!SR){
 }else{
   // 휴대폰 브라우저는 한 번 쓴 인식기를 다시 켜지 못하거나 '끝' 신호를 빠뜨리기도 해서,
   // 마이크를 누를 때마다 새 인식기를 만들고 끝 신호가 없어도 스스로 정리한다.
-  let heard='', parsed=false, safety=null, stopWait=null, quiet=null;
+  // 아이폰 Safari는 stop() 뒤에도 마이크를 잡고 있을 수 있어서, 끝낼 때는 abort()로 확실히 놓아준다.
+  let heard='', parsed=false, safety=null, stopWait=null, quiet=null, lastRec=null, session=0;
   const btn = $('#micBtn');
-  function finish(r){
+  function release(r){ if(!r) return; try{ r.abort(); }catch(e){} }
+  function finish(r, why){
     if(r !== rec) return;              // 이전 인식기에서 늦게 온 신호는 무시
+    diag(`#${session} 정리 (${why})`);
     clearTimeout(safety); clearTimeout(stopWait); clearTimeout(quiet);
     rec = null; listening = false;
+    release(r);
     btn.classList.remove('on'); btn.setAttribute('aria-label','음성 입력 시작');
     $('#sentence').placeholder = '예: 배달 음식 15,000원 / 어제 택시 만이천원';
     if(!parsed && heard.trim()){ parsed = true; applyParsed(parseSentence(heard), heard); }
   }
   function stopListening(){
     const r = rec; if(!r) return;
+    diag(`#${session} 멈춤 요청`);
     try{ r.stop(); }catch(e){}
-    stopWait = setTimeout(()=>finish(r), 1500);   // 끝 신호가 안 와도 정리
+    stopWait = setTimeout(()=>finish(r,'끝 신호 없음'), 1500);   // 끝 신호가 안 와도 정리
   }
   function startListening(){
     const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    release(lastRec);                                  // 이전 인식기가 마이크를 잡고 있으면 놓게 함
     const r = new Rec(); r.lang='ko-KR'; r.interimResults=true; r.continuous=false;
+    lastRec = r; session++;
+    const id = session;
     heard=''; parsed=false;
+    diag(`#${id} 시작`);
+    ['start','audiostart','soundstart','speechstart','speechend','soundend','audioend'].forEach(ev=>{
+      r.addEventListener(ev, ()=>diag(`#${id} ${ev}`));
+    });
     r.onresult = e=>{
-      if(r !== rec) return;
       let txt=''; let final=false;
       for(const x of e.results){ txt += x[0].transcript; if(x.isFinal) final=true; }
+      diag(`#${id} 결과${final?'(최종)':''}: ${txt}`);
+      if(r !== rec) return;
       heard = txt; $('#sentence').value = txt;
-      if(final){ parsed=true; applyParsed(parseSentence(txt), txt); stopListening(); }
+      if(final){ parsed=true; applyParsed(parseSentence(txt), txt); finish(r,'최종 결과'); }
     };
-    r.onend = ()=>finish(r);
+    r.onend = ()=>{ diag(`#${id} end`); finish(r,'end'); };
     r.onerror = e=>{
+      diag(`#${id} 오류: ${e.error}${e.message?' '+e.message:''}`);
       if(r !== rec) return;
       const msg = {'not-allowed':'마이크 권한이 거부되었습니다. 주소창의 마이크 아이콘에서 허용해 주세요.','service-not-allowed':'음성 인식이 꺼져 있습니다. 아이폰은 설정 → Siri에서 받아쓰기를 켜 주세요.','no-speech':'음성이 들리지 않았습니다. 다시 눌러 말해 주세요.','audio-capture':'마이크를 찾지 못했습니다.','network':'음성 인식에 인터넷 연결이 필요합니다.'}[e.error];
       if(e.error !== 'aborted') toast(msg || '음성 인식 오류: '+e.error);
-      finish(r);
+      finish(r,'오류');
     };
     rec = r;
     try{ r.start(); }
-    catch(err){ toast('음성 인식을 시작하지 못했습니다. 다시 눌러 주세요.'); finish(r); return; }
+    catch(err){ diag(`#${id} start 실패: ${err.name||''} ${err.message||err}`); toast('음성 인식을 시작하지 못했습니다. 다시 눌러 주세요.'); finish(r,'start 실패'); return; }
     listening = true;
     btn.classList.add('on'); btn.setAttribute('aria-label','음성 입력 중지');
     $('#sentence').value=''; $('#sentence').placeholder='듣는 중… 예: 배달 음식 15,000원';
     safety = setTimeout(stopListening, 15000);       // 15초 넘게 듣고 있으면 멈춤
     quiet = setTimeout(()=>{                          // 6초 동안 한 글자도 안 들어오면 안내
       if(r !== rec || heard) return;
+      diag(`#${id} 6초 동안 결과 없음`);
       const info = inAppInfo(navigator.userAgent);
       toast(info ? `소리가 인식되지 않아요. ${info.browser}로 열어 주세요.` : '소리가 인식되지 않아요. 위 칸을 누르고 키보드의 마이크로 말해도 됩니다.');
     }, 6000);
