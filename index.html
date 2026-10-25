@@ -122,6 +122,9 @@ details summary{cursor:pointer;font-weight:700;font-size:15px}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:9px 16px;border-radius:10px;font-size:14px;display:flex;gap:12px;align-items:center;z-index:20}
 .toast button{background:none;border:0;color:var(--accent-soft);font-weight:700;text-decoration:underline}
 .mt{margin-top:16px}
+.inapp{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;background:var(--accent-soft);border:1px solid var(--accent);border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:14px}
+.inapp span{flex:1 1 220px;min-width:0}
+.inapp a{text-decoration:none;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -133,6 +136,10 @@ details summary{cursor:pointer;font-weight:700;font-size:15px}
       <button role="tab" id="tab-stats" aria-selected="false">통계</button>
     </div>
   </header>
+  <div class="inapp" id="inappBanner" hidden>
+    <span id="inappMsg"></span>
+    <a class="btn small primary" id="openExternal" href="#"></a>
+  </div>
 
   <!-- 기록 -->
   <section id="view-log">
@@ -361,6 +368,27 @@ function resetForm(){
 }
 $('#cancelEdit').onclick = resetForm;
 
+/* ---------- 앱 내장 브라우저 안내 ---------- */
+// 카카오톡 등 앱 안의 브라우저는 음성 인식이 처음 한 번만 동작하는 경우가 있어 기본 브라우저로 열도록 안내
+function inAppInfo(ua){
+  const ios = /iPhone|iPad|iPod/i.test(ua);
+  const browser = ios ? 'Safari' : 'Chrome';
+  if(/KAKAOTALK/i.test(ua)) return {app:'카카오톡', browser, href:'kakaotalk://web/openExternal?url='+encodeURIComponent(location.href)};
+  if(/\bLine\//i.test(ua)) return {app:'라인', browser, href: location.href + (location.search?'&':'?') + 'openExternalBrowser=1'};
+  if(/NAVER\(inapp|Instagram|FBAN|FBAV|DaumApps|everytimeApp|BAND\//i.test(ua)) return {app:'앱', browser, href:null};
+  return null;
+}
+function showInAppBanner(info){
+  if(!info) return;
+  $('#inappMsg').textContent = `${info.app} 안에서 열면 음성 인식이 처음 한 번만 될 수 있어요. ${info.browser}로 열어 주세요.`;
+  const a = $('#openExternal');
+  if(info.href){ a.href = info.href; a.textContent = `${info.browser}로 열기`; }
+  else { a.href = '#'; a.textContent = '주소 복사';
+    a.onclick = e=>{ e.preventDefault(); navigator.clipboard?.writeText(location.href).then(()=>toast(`주소를 복사했습니다. ${info.browser}에 붙여 넣어 여세요.`), ()=>toast(location.href)); }; }
+  $('#inappBanner').hidden = false;
+}
+showInAppBanner(inAppInfo(navigator.userAgent));
+
 /* ---------- 음성 인식 ---------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null, listening = false;
@@ -372,11 +400,11 @@ if(!SR){
 }else{
   // 휴대폰 브라우저는 한 번 쓴 인식기를 다시 켜지 못하거나 '끝' 신호를 빠뜨리기도 해서,
   // 마이크를 누를 때마다 새 인식기를 만들고 끝 신호가 없어도 스스로 정리한다.
-  let heard='', parsed=false, safety=null, stopWait=null;
+  let heard='', parsed=false, safety=null, stopWait=null, quiet=null;
   const btn = $('#micBtn');
   function finish(r){
     if(r !== rec) return;              // 이전 인식기에서 늦게 온 신호는 무시
-    clearTimeout(safety); clearTimeout(stopWait);
+    clearTimeout(safety); clearTimeout(stopWait); clearTimeout(quiet);
     rec = null; listening = false;
     btn.classList.remove('on'); btn.setAttribute('aria-label','음성 입력 시작');
     $('#sentence').placeholder = '예: 배달 음식 15,000원 / 어제 택시 만이천원';
@@ -412,6 +440,11 @@ if(!SR){
     btn.classList.add('on'); btn.setAttribute('aria-label','음성 입력 중지');
     $('#sentence').value=''; $('#sentence').placeholder='듣는 중… 예: 배달 음식 15,000원';
     safety = setTimeout(stopListening, 15000);       // 15초 넘게 듣고 있으면 멈춤
+    quiet = setTimeout(()=>{                          // 6초 동안 한 글자도 안 들어오면 안내
+      if(r !== rec || heard) return;
+      const info = inAppInfo(navigator.userAgent);
+      toast(info ? `소리가 인식되지 않아요. ${info.browser}로 열어 주세요.` : '소리가 인식되지 않아요. 위 칸을 누르고 키보드의 마이크로 말해도 됩니다.');
+    }, 6000);
   }
   btn.onclick = ()=>{ if(listening) stopListening(); else startListening(); };
 }
