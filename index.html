@@ -370,28 +370,50 @@ if(!SR){
     : '이 브라우저는 음성 인식을 지원하지 않습니다. Chrome이나 Edge에서 열거나, 위 칸에 문장을 입력하고 Enter를 누르세요.';
   $('#micBtn').disabled = true; $('#micBtn').style.opacity = .4;
 }else{
-  rec = new SR(); rec.lang='ko-KR'; rec.interimResults=true; rec.continuous=false;
-  let heard='', parsed=false;
-  rec.onresult = e=>{
-    let txt=''; let final=false;
-    for(const r of e.results){ txt += r[0].transcript; if(r.isFinal) final=true; }
-    heard = txt; $('#sentence').value = txt;
-    if(final){ parsed=true; applyParsed(parseSentence(txt), txt); }
-  };
-  rec.onend = ()=>{
-    listening=false; $('#micBtn').classList.remove('on'); $('#micBtn').setAttribute('aria-label','음성 입력 시작');
-    // iPhone Safari는 최종 결과 표시 없이 끝나기도 해서, 들은 문장이 있으면 여기서 해석
-    if(!parsed && heard.trim()) applyParsed(parseSentence(heard), heard);
-  };
-  rec.onstart = ()=>{ heard=''; parsed=false; };
-  rec.onerror = e=>{
-    const msg = {'not-allowed':'마이크 권한이 거부되었습니다. 주소창의 마이크 아이콘에서 허용해 주세요.','no-speech':'음성이 들리지 않았습니다. 다시 눌러 말해 주세요.','network':'음성 인식에 인터넷 연결이 필요합니다.'}[e.error] || '음성 인식 오류: '+e.error;
-    toast(msg);
-  };
-  $('#micBtn').onclick = ()=>{
-    if(listening){ rec.stop(); return; }
-    try{ rec.start(); listening=true; $('#micBtn').classList.add('on'); $('#micBtn').setAttribute('aria-label','음성 입력 중지'); $('#sentence').value=''; $('#sentence').placeholder='듣는 중… 예: 배달 음식 15,000원'; }catch(err){}
-  };
+  // 휴대폰 브라우저는 한 번 쓴 인식기를 다시 켜지 못하거나 '끝' 신호를 빠뜨리기도 해서,
+  // 마이크를 누를 때마다 새 인식기를 만들고 끝 신호가 없어도 스스로 정리한다.
+  let heard='', parsed=false, safety=null, stopWait=null;
+  const btn = $('#micBtn');
+  function finish(r){
+    if(r !== rec) return;              // 이전 인식기에서 늦게 온 신호는 무시
+    clearTimeout(safety); clearTimeout(stopWait);
+    rec = null; listening = false;
+    btn.classList.remove('on'); btn.setAttribute('aria-label','음성 입력 시작');
+    $('#sentence').placeholder = '예: 배달 음식 15,000원 / 어제 택시 만이천원';
+    if(!parsed && heard.trim()){ parsed = true; applyParsed(parseSentence(heard), heard); }
+  }
+  function stopListening(){
+    const r = rec; if(!r) return;
+    try{ r.stop(); }catch(e){}
+    stopWait = setTimeout(()=>finish(r), 1500);   // 끝 신호가 안 와도 정리
+  }
+  function startListening(){
+    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const r = new Rec(); r.lang='ko-KR'; r.interimResults=true; r.continuous=false;
+    heard=''; parsed=false;
+    r.onresult = e=>{
+      if(r !== rec) return;
+      let txt=''; let final=false;
+      for(const x of e.results){ txt += x[0].transcript; if(x.isFinal) final=true; }
+      heard = txt; $('#sentence').value = txt;
+      if(final){ parsed=true; applyParsed(parseSentence(txt), txt); stopListening(); }
+    };
+    r.onend = ()=>finish(r);
+    r.onerror = e=>{
+      if(r !== rec) return;
+      const msg = {'not-allowed':'마이크 권한이 거부되었습니다. 주소창의 마이크 아이콘에서 허용해 주세요.','service-not-allowed':'음성 인식이 꺼져 있습니다. 아이폰은 설정 → Siri에서 받아쓰기를 켜 주세요.','no-speech':'음성이 들리지 않았습니다. 다시 눌러 말해 주세요.','audio-capture':'마이크를 찾지 못했습니다.','network':'음성 인식에 인터넷 연결이 필요합니다.'}[e.error];
+      if(e.error !== 'aborted') toast(msg || '음성 인식 오류: '+e.error);
+      finish(r);
+    };
+    rec = r;
+    try{ r.start(); }
+    catch(err){ toast('음성 인식을 시작하지 못했습니다. 다시 눌러 주세요.'); finish(r); return; }
+    listening = true;
+    btn.classList.add('on'); btn.setAttribute('aria-label','음성 입력 중지');
+    $('#sentence').value=''; $('#sentence').placeholder='듣는 중… 예: 배달 음식 15,000원';
+    safety = setTimeout(stopListening, 15000);       // 15초 넘게 듣고 있으면 멈춤
+  }
+  btn.onclick = ()=>{ if(listening) stopListening(); else startListening(); };
 }
 
 /* ---------- 목록 ---------- */
