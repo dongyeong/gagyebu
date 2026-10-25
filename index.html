@@ -365,17 +365,25 @@ $('#cancelEdit').onclick = resetForm;
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null, listening = false;
 if(!SR){
-  $('#micHint').textContent = '이 브라우저는 음성 인식을 지원하지 않습니다. Chrome이나 Edge에서 열거나, 위 칸에 문장을 입력하고 Enter를 누르세요.';
+  $('#micHint').textContent = /iPhone|iPad/.test(navigator.userAgent)
+    ? '이 화면에서는 음성 인식을 쓸 수 없습니다. Safari로 열거나, 위 칸을 누르고 키보드의 마이크로 말한 뒤 완료(Enter)를 누르세요.'
+    : '이 브라우저는 음성 인식을 지원하지 않습니다. Chrome이나 Edge에서 열거나, 위 칸에 문장을 입력하고 Enter를 누르세요.';
   $('#micBtn').disabled = true; $('#micBtn').style.opacity = .4;
 }else{
   rec = new SR(); rec.lang='ko-KR'; rec.interimResults=true; rec.continuous=false;
+  let heard='', parsed=false;
   rec.onresult = e=>{
     let txt=''; let final=false;
     for(const r of e.results){ txt += r[0].transcript; if(r.isFinal) final=true; }
-    $('#sentence').value = txt;
-    if(final){ const p=parseSentence(txt); applyParsed(p, txt); }
+    heard = txt; $('#sentence').value = txt;
+    if(final){ parsed=true; applyParsed(parseSentence(txt), txt); }
   };
-  rec.onend = ()=>{ listening=false; $('#micBtn').classList.remove('on'); $('#micBtn').setAttribute('aria-label','음성 입력 시작'); };
+  rec.onend = ()=>{
+    listening=false; $('#micBtn').classList.remove('on'); $('#micBtn').setAttribute('aria-label','음성 입력 시작');
+    // iPhone Safari는 최종 결과 표시 없이 끝나기도 해서, 들은 문장이 있으면 여기서 해석
+    if(!parsed && heard.trim()) applyParsed(parseSentence(heard), heard);
+  };
+  rec.onstart = ()=>{ heard=''; parsed=false; };
   rec.onerror = e=>{
     const msg = {'not-allowed':'마이크 권한이 거부되었습니다. 주소창의 마이크 아이콘에서 허용해 주세요.','no-speech':'음성이 들리지 않았습니다. 다시 눌러 말해 주세요.','network':'음성 인식에 인터넷 연결이 필요합니다.'}[e.error] || '음성 인식 오류: '+e.error;
     toast(msg);
